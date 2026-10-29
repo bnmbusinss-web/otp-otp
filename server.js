@@ -37,9 +37,7 @@ wss.on('connection', function connection(ws) {
 
                 imap.once('ready', function() {
                     console.log("📬 تم الاتصال بصندوق الوارد بنجاح!");
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send("IMAP_READY");
-                    }
+                    if (ws.readyState === WebSocket.OPEN) ws.send("IMAP_READY");
                     
                     imap.openBox('INBOX', false, function(err, box) {
                         if (err) {
@@ -51,16 +49,13 @@ wss.on('connection', function connection(ws) {
                             if (isSearching || !imap || imap.state !== 'authenticated') return;
                             isSearching = true;
 
-                            // البحث عن الرسائل غير المقروءة فقط
                             imap.search(['UNSEEN'], function(err, results) {
                                 if (err || !results || results.length === 0) {
                                     isSearching = false;
                                     return;
                                 }
                                 
-                                // 🔥 فلتر 1: جلب "أحدث" رسالة واحدة فقط بدلاً من جلب رسائل قديمة
-                                const latestUnread = results.slice(-1);
-                                
+                                const latestUnread = results.slice(-1); // جلب أحدث رسالة فقط
                                 const f = imap.fetch(latestUnread, { bodies: '', markSeen: true });
                                 
                                 f.on('message', function(msg, seqno) {
@@ -68,79 +63,62 @@ wss.on('connection', function connection(ws) {
                                         simpleParser(stream, (err, parsed) => {
                                             if (err || !parsed) return;
                                             
-                                            // 🔥 فلتر 2: التأكد من أن الرسالة من BLS وتخص المواعيد
                                             const sender = parsed.from && parsed.from.text ? parsed.from.text.toLowerCase() : "";
                                             const subject = parsed.subject ? parsed.subject.toLowerCase() : "";
                                             
-                                            const isFromBLS = sender.includes('bls') || subject.includes('appointment') || subject.includes('verification');
+                                            const isFromBLS = sender.includes('bls') || subject.includes('appointment') || subject.includes('verification') || subject.includes('consent');
                                             
-                                            if (!isFromBLS) {
-                                                console.log("⚠️ تم تجاهل رسالة لأنها ليست من شركة BLS.");
-                                                return;
-                                            }
+                                            if (!isFromBLS) return;
 
-                                            const rawBody = (parsed.text || "") + " " + (parsed.html || "");
+                                            const htmlBody = parsed.html || "";
+                                            const rawBody = (parsed.text || "") + " " + htmlBody;
                                             let cleanText = rawBody.replace(/<[^>]+>/g, ' ');
                                             let textWithoutSpaces = cleanText.replace(/\s+/g, '');
 
-                                            // 🔥 فلتر 3: استخراج كود الـ OTP المكون من 6 أرقام بدقة بالغة
+                                            // 1. البحث عن OTP
                                             const blsMatch = textWithoutSpaces.match(/OTP.*?(\d{6})/i);
                                             const otp = blsMatch ? blsMatch[1] : null;
 
+                                            // 2. البحث عن رابط الموافقة (Accept Link) في الكود المصدري للإيميل
+                                            const consentMatch = htmlBody.match(/<a[^>]+href="([^"]+)"[^>]*>\s*Accept\s*<\/a>/i);
+                                            let consentLink = consentMatch ? consentMatch[1] : null;
+
                                             if (otp) {
-                                                console.log("🎯 [نجاح] تم جلب OTP صحيح وجديد:", otp);
-                                                if (ws.readyState === WebSocket.OPEN) {
-                                                    ws.send(otp);
-                                                }
-                                            } else {
-                                                console.log("⚠️ الرسالة من BLS لكن لم يتم العثور على الكود بداخلها.");
+                                                console.log("🎯 [نجاح] تم جلب OTP:", otp);
+                                                if (ws.readyState === WebSocket.OPEN) ws.send(otp);
+                                            } else if (consentLink) {
+                                                // تنظيف الرابط من شوائب HTML إن وجدت
+                                                consentLink = consentLink.replace(/&amp;/g, '&');
+                                                console.log("🔗 [نجاح] تم جلب رابط الموافقة (Consent):", consentLink);
+                                                if (ws.readyState === WebSocket.OPEN) ws.send(consentLink);
                                             }
                                         });
                                     });
                                 });
 
-                                f.once('error', function(err) {
-                                    console.log("⚠️ خطأ في الجلب:", err.message);
-                                    isSearching = false;
-                                });
-
-                                f.once('end', function() {
-                                    isSearching = false;
-                                });
+                                f.once('error', (err) => { isSearching = false; });
+                                f.once('end', () => { isSearching = false; });
                             });
                         }
 
                         searchForOTP();
                         searchInterval = setInterval(searchForOTP, 2000);
-                        
-                        imap.on('mail', function() {
-                            console.log("📩 وصلت رسالة جديدة!");
-                            searchForOTP();
-                        });
+                        imap.on('mail', searchForOTP);
                     });
                 });
 
                 imap.once('error', function(err) {
-                    console.log("❌ خطأ IMAP: ", err.message);
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send("ERROR");
-                    }
+                    if (ws.readyState === WebSocket.OPEN) ws.send("ERROR");
                     clearInterval(searchInterval);
                     isSearching = false;
                 });
-
                 imap.connect();
             }
-        } catch (e) {
-            console.error("❌ بيانات غير صالحة مرسلة من المتصفح.");
-        }
+        } catch (e) {}
     });
 
     ws.on('close', () => {
-        if (imap) {
-            try { imap.end(); } catch (e) {}
-        }
+        if (imap) { try { imap.end(); } catch (e) {} }
         if (searchInterval) clearInterval(searchInterval);
-        console.log("تم قطع الاتصال.");
     });
 });
