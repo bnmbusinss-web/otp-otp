@@ -59,7 +59,7 @@ wss.on('connection', function connection(ws) {
                                     return;
                                 }
                                 
-                                // 🔥 مهم جداً: أخذ آخر 3 رسائل غير مقروءة فقط لتجنب تعليق السيرفر بالرسائل القديمة
+                                // 🔥 أخذ آخر 3 رسائل غير مقروءة فقط لتجنب تعليق السيرفر بالرسائل القديمة
                                 const latestUnread = results.slice(-3);
                                 
                                 // markSeen: true يحول الرسالة في Gmail إلى "مقروءة" فوراً
@@ -71,10 +71,12 @@ wss.on('connection', function connection(ws) {
                                             if (err || !parsed) return;
                                             
                                             const rawBody = (parsed.text || "") + " " + (parsed.html || "");
-                                            const cleanText = rawBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
                                             
-                                            // استهداف صيغة BLS المباشرة (OTP: 111666) أولاً ثم أي 6 أرقام
-                                            const blsMatch = cleanText.match(/OTP\s*[:\-]?\s*(\d{6})/i);
+                                            // 🔥 التعديل هنا: تنظيف أقوى للنص لضمان استخراج الكود حتى لو كان بداخل تصميم ذكي
+                                            const cleanText = rawBody.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ');
+                                            
+                                            // استهداف صيغة BLS المباشرة متجاهلاً أي مسافات أو رموز بين كلمة OTP والأرقام
+                                            const blsMatch = cleanText.match(/OTP[^\d]*(\d{6})/i);
                                             const generalMatch = cleanText.match(/\b(\d{6})\b/);
                                             const otp = blsMatch ? blsMatch[1] : (generalMatch ? generalMatch[1] : null);
 
