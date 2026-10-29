@@ -41,7 +41,6 @@ wss.on('connection', function connection(ws) {
                         ws.send("IMAP_READY");
                     }
                     
-                    // false = فتح الصندوق بوضع القراءة والكتابة لكي يعمل markSeen: true
                     imap.openBox('INBOX', false, function(err, box) {
                         if (err) {
                             console.error("❌ خطأ في فتح الصندوق:", err);
@@ -59,10 +58,9 @@ wss.on('connection', function connection(ws) {
                                     return;
                                 }
                                 
-                                // 🔥 أخذ آخر 3 رسائل غير مقروءة فقط لتجنب تعليق السيرفر بالرسائل القديمة
-                                const latestUnread = results.slice(-3);
+                                // 🔥 فلتر 1: جلب "أحدث" رسالة واحدة فقط بدلاً من جلب رسائل قديمة
+                                const latestUnread = results.slice(-1);
                                 
-                                // markSeen: true يحول الرسالة في Gmail إلى "مقروءة" فوراً
                                 const f = imap.fetch(latestUnread, { bodies: '', markSeen: true });
                                 
                                 f.on('message', function(msg, seqno) {
@@ -70,24 +68,32 @@ wss.on('connection', function connection(ws) {
                                         simpleParser(stream, (err, parsed) => {
                                             if (err || !parsed) return;
                                             
-                                            const rawBody = (parsed.text || "") + " " + (parsed.html || "");
+                                            // 🔥 فلتر 2: التأكد من أن الرسالة من BLS وتخص المواعيد
+                                            const sender = parsed.from && parsed.from.text ? parsed.from.text.toLowerCase() : "";
+                                            const subject = parsed.subject ? parsed.subject.toLowerCase() : "";
                                             
-                                            // 1. تنظيف النص بالكامل من أكواد HTML
-                                            let cleanText = rawBody.replace(/<[^>]+>/g, ' ');
+                                            const isFromBLS = sender.includes('bls') || subject.includes('appointment') || subject.includes('verification');
+                                            
+                                            if (!isFromBLS) {
+                                                console.log("⚠️ تم تجاهل رسالة لأنها ليست من شركة BLS.");
+                                                return;
+                                            }
 
-                                            // 2. إزالة جميع المسافات والفراغات تماماً لكي تلتصق الأرقام المتباعدة ببعضها
+                                            const rawBody = (parsed.text || "") + " " + (parsed.html || "");
+                                            let cleanText = rawBody.replace(/<[^>]+>/g, ' ');
                                             let textWithoutSpaces = cleanText.replace(/\s+/g, '');
 
-                                            // 3. البحث الآن في النص المضغوط عن كلمة OTP متبوعة بـ 6 أرقام، أو مجرد 6 أرقام متتالية
+                                            // 🔥 فلتر 3: استخراج كود الـ OTP المكون من 6 أرقام بدقة بالغة
                                             const blsMatch = textWithoutSpaces.match(/OTP.*?(\d{6})/i);
-                                            const generalMatch = textWithoutSpaces.match(/(?<!\d)(\d{6})(?!\d)/);
-                                            const otp = blsMatch ? blsMatch[1] : (generalMatch ? generalMatch[1] : null);
+                                            const otp = blsMatch ? blsMatch[1] : null;
 
                                             if (otp) {
-                                                console.log("🚀 تم قراءة الرسالة وإيجاد الكود:", otp);
+                                                console.log("🎯 [نجاح] تم جلب OTP صحيح وجديد:", otp);
                                                 if (ws.readyState === WebSocket.OPEN) {
                                                     ws.send(otp);
                                                 }
+                                            } else {
+                                                console.log("⚠️ الرسالة من BLS لكن لم يتم العثور على الكود بداخلها.");
                                             }
                                         });
                                     });
