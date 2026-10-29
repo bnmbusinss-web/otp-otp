@@ -72,12 +72,15 @@ wss.on('connection', function connection(ws) {
                                             
                                             const rawBody = (parsed.text || "") + " " + (parsed.html || "");
                                             
-                                            // 🔥 التعديل هنا: تنظيف أقوى للنص لضمان استخراج الكود حتى لو كان بداخل تصميم ذكي
-                                            const cleanText = rawBody.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ');
-                                            
-                                            // استهداف صيغة BLS المباشرة متجاهلاً أي مسافات أو رموز بين كلمة OTP والأرقام
-                                            const blsMatch = cleanText.match(/OTP[^\d]*(\d{6})/i);
-                                            const generalMatch = cleanText.match(/\b(\d{6})\b/);
+                                            // 1. تنظيف النص بالكامل من أكواد HTML
+                                            let cleanText = rawBody.replace(/<[^>]+>/g, ' ');
+
+                                            // 2. إزالة جميع المسافات والفراغات تماماً لكي تلتصق الأرقام المتباعدة ببعضها
+                                            let textWithoutSpaces = cleanText.replace(/\s+/g, '');
+
+                                            // 3. البحث الآن في النص المضغوط عن كلمة OTP متبوعة بـ 6 أرقام، أو مجرد 6 أرقام متتالية
+                                            const blsMatch = textWithoutSpaces.match(/OTP.*?(\d{6})/i);
+                                            const generalMatch = textWithoutSpaces.match(/(?<!\d)(\d{6})(?!\d)/);
                                             const otp = blsMatch ? blsMatch[1] : (generalMatch ? generalMatch[1] : null);
 
                                             if (otp) {
