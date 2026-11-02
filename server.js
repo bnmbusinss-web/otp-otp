@@ -5,7 +5,16 @@ const WebSocket = require('ws');
 const PORT = process.env.PORT || 8080;
 const wss = new WebSocket.Server({ port: PORT });
 
-console.log(`WebSocket server running on port ${PORT}`);
+console.log(`🚀 WebSocket server running on port ${PORT}`);
+
+// إرسال نبضات (Ping) للحفاظ على اتصال Railway نشطاً ومنعه من النوم أثناء الانتظار
+setInterval(() => {
+    wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.ping();
+        }
+    });
+}, 25000);
 
 wss.on('connection', function connection(ws) {
     console.log("✅ جهاز جديد متصل، في انتظار بيانات الإيميل...");
@@ -18,13 +27,14 @@ wss.on('connection', function connection(ws) {
             const data = JSON.parse(message);
             
             if (data.action === 'start_imap' && data.email && data.password) {
-                console.log(`محاولة الاتصال بالإيميل: ${data.email}`);
+                console.log(`🔄 محاولة الاتصال بالإيميل: ${data.email}`);
 
                 if (imap) {
                     try { imap.end(); } catch (e) {}
                     clearInterval(searchInterval);
                 }
 
+                // إعدادات IMAP محسنة لعدم انقطاع الاتصال
                 imap = new Imap({
                     user: data.email.trim(),
                     password: data.password.replace(/\s+/g, ''),
@@ -32,7 +42,12 @@ wss.on('connection', function connection(ws) {
                     port: 993,
                     tls: true,
                     tlsOptions: { rejectUnauthorized: false },
-                    keepalive: true
+                    keepalive: {
+                        interval: 10000,
+                        idleInterval: 300000,
+                        forceNoop: true // إجبار Gmail على إبقاء الاتصال حياً
+                    },
+                    authTimeout: 10000
                 });
 
                 imap.once('ready', function() {
@@ -42,6 +57,7 @@ wss.on('connection', function connection(ws) {
                     imap.openBox('INBOX', false, function(err, box) {
                         if (err) {
                             console.error("❌ خطأ في فتح الصندوق:", err);
+                            if (ws.readyState === WebSocket.OPEN) ws.send("ERROR");
                             return;
                         }
 
@@ -55,7 +71,7 @@ wss.on('connection', function connection(ws) {
                                     return;
                                 }
                                 
-                                const latestUnread = results.slice(-1); // جلب أحدث رسالة فقط
+                                const latestUnread = results.slice(-1);
                                 const f = imap.fetch(latestUnread, { bodies: '', markSeen: true });
                                 
                                 f.on('message', function(msg, seqno) {
@@ -75,11 +91,9 @@ wss.on('connection', function connection(ws) {
                                             let cleanText = rawBody.replace(/<[^>]+>/g, ' ');
                                             let textWithoutSpaces = cleanText.replace(/\s+/g, '');
 
-                                            // 1. البحث عن OTP
                                             const blsMatch = textWithoutSpaces.match(/OTP.*?(\d{6})/i);
                                             const otp = blsMatch ? blsMatch[1] : null;
 
-                                            // 2. البحث عن رابط الموافقة (Accept Link) في الكود المصدري للإيميل
                                             const consentMatch = htmlBody.match(/<a[^>]+href="([^"]+)"[^>]*>\s*Accept\s*<\/a>/i);
                                             let consentLink = consentMatch ? consentMatch[1] : null;
 
@@ -87,7 +101,6 @@ wss.on('connection', function connection(ws) {
                                                 console.log("🎯 [نجاح] تم جلب OTP:", otp);
                                                 if (ws.readyState === WebSocket.OPEN) ws.send(otp);
                                             } else if (consentLink) {
-                                                // تنظيف الرابط من شوائب HTML إن وجدت
                                                 consentLink = consentLink.replace(/&amp;/g, '&');
                                                 console.log("🔗 [نجاح] تم جلب رابط الموافقة (Consent):", consentLink);
                                                 if (ws.readyState === WebSocket.OPEN) ws.send(consentLink);
@@ -101,23 +114,40 @@ wss.on('connection', function connection(ws) {
                             });
                         }
 
+                        // البحث الفوري عند الاتصال
                         searchForOTP();
-                        searchInterval = setInterval(searchForOTP, 2000);
+                        
+                        // الاستماع الفوري واللحظي للرسائل دون الحاجة لضرب السيرفر باستمرار
                         imap.on('mail', searchForOTP);
+                        imap.on('update', searchForOTP);
+
+                        // فحص احتياطي هادئ كل 5 ثواني (بدل 2 ثانية) لتجنب حظر جوجل
+                        searchInterval = setInterval(searchForOTP, 5000);
                     });
                 });
 
                 imap.once('error', function(err) {
+                    console.error("❌ خطأ IMAP:", err.message);
                     if (ws.readyState === WebSocket.OPEN) ws.send("ERROR");
                     clearInterval(searchInterval);
                     isSearching = false;
                 });
+
+                imap.once('end', function() {
+                    console.log("⚠️ انقطع اتصال IMAP.");
+                    clearInterval(searchInterval);
+                    isSearching = false;
+                });
+
                 imap.connect();
             }
-        } catch (e) {}
+        } catch (e) {
+            console.error("❌ خطأ في معالجة الرسالة:", e.message);
+        }
     });
 
     ws.on('close', () => {
+        console.log("🔴 تم قطع اتصال العميل (المتصفح).");
         if (imap) { try { imap.end(); } catch (e) {} }
         if (searchInterval) clearInterval(searchInterval);
     });
