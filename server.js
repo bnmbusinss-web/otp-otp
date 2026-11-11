@@ -82,7 +82,7 @@ wss.on('connection', function connection(ws) {
                                             const sender = parsed.from && parsed.from.text ? parsed.from.text.toLowerCase() : "";
                                             const subject = parsed.subject ? parsed.subject.toLowerCase() : "";
                                             
-                                            const isFromBLS = sender.includes('bls') || subject.includes('appointment') || subject.includes('verification') || subject.includes('consent');
+                                            const isFromBLS = sender.includes('bls') || subject.includes('bls') || subject.includes('appointment') || subject.includes('verification') || subject.includes('consent') || subject.includes('welcome') || subject.includes('password');
                                             
                                             if (!isFromBLS) return;
 
@@ -91,15 +91,24 @@ wss.on('connection', function connection(ws) {
                                             let cleanText = rawBody.replace(/<[^>]+>/g, ' ');
                                             let textWithoutSpaces = cleanText.replace(/\s+/g, '');
 
+                                            // 1. البحث عن كود OTP (6 أرقام)
                                             const blsMatch = textWithoutSpaces.match(/OTP.*?(\d{6})/i);
                                             const otp = blsMatch ? blsMatch[1] : null;
 
+                                            // 2. البحث عن الباسورد المؤقت (8 حروف وأرقام بعد كلمة Password:)
+                                            const passMatch = htmlBody.match(/Password\s*:\s*<\/p>\s*<h1[^>]*>\s*([a-zA-Z0-9]{8})\s*<\/h1>/i) || cleanText.match(/Password\s*:\s*([a-zA-Z0-9]{8})\b/i);
+                                            const tempPassword = passMatch ? passMatch[1].trim() : null;
+
+                                            // 3. البحث عن رابط الموافقة (Consent Link)
                                             const consentMatch = htmlBody.match(/<a[^>]+href="([^"]+)"[^>]*>\s*Accept\s*<\/a>/i);
                                             let consentLink = consentMatch ? consentMatch[1] : null;
 
                                             if (otp) {
                                                 console.log("🎯 [نجاح] تم جلب OTP:", otp);
                                                 if (ws.readyState === WebSocket.OPEN) ws.send(otp);
+                                            } else if (tempPassword) {
+                                                console.log("🔑 [نجاح] تم جلب الباسورد المؤقت:", tempPassword);
+                                                if (ws.readyState === WebSocket.OPEN) ws.send(tempPassword);
                                             } else if (consentLink) {
                                                 consentLink = consentLink.replace(/&amp;/g, '&');
                                                 console.log("🔗 [نجاح] تم جلب رابط الموافقة (Consent):", consentLink);
@@ -117,11 +126,11 @@ wss.on('connection', function connection(ws) {
                         // البحث الفوري عند الاتصال
                         searchForOTP();
                         
-                        // الاستماع الفوري واللحظي للرسائل دون الحاجة لضرب السيرفر باستمرار
+                        // الاستماع الفوري واللحظي للرسائل
                         imap.on('mail', searchForOTP);
                         imap.on('update', searchForOTP);
 
-                        // فحص احتياطي هادئ كل 5 ثواني (بدل 2 ثانية) لتجنب حظر جوجل
+                        // فحص احتياطي هادئ كل 5 ثواني
                         searchInterval = setInterval(searchForOTP, 5000);
                     });
                 });
